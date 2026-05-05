@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>富禮大廈：監視者</title>
+    <style>
+        :root { --bg: #0d0d0d; --accent: #d35400; --neon: #00ff41; }
+        body { font-family: monospace; background: var(--bg); color: #ccc; margin: 0; padding: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        
+        /* 頂部狀態 */
+        .header { background: #1a1a1a; padding: 10px; border-bottom: 2px solid var(--accent); display: flex; justify-content: space-between; font-size: 14px; flex-shrink: 0; }
+        
+        /* 遊戲畫面容器 */
+        #game-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+        /* 大廈顯示區 */
+        #building-area { height: 50%; background: #000; overflow-y: auto; padding: 10px; display: flex; justify-content: center; flex-shrink: 0; }
+        #building { display: flex; flex-direction: column-reverse; gap: 4px; width: 100%; max-width: 300px; }
+        
+        .floor { display: flex; gap: 4px; height: 35px; }
+        .label { width: 30px; color: #555; font-size: 10px; display: flex; align-items: center; justify-content: center; }
+        .room { flex: 1; background: #1a1a1a; border: 1px solid #333; position: relative; border-radius: 2px; cursor: pointer; }
+        .room:active { background: var(--accent); }
+        .room.seen { border-color: #555; background: #111; }
+        .scent { position: absolute; inset: 0; background: radial-gradient(circle, rgba(155,89,182,0.4) 0%, transparent 80%); }
+
+        /* 監視日誌區 */
+        #console { flex: 1; background: #050505; border-top: 2px solid #222; display: flex; flex-direction: column; padding: 10px; overflow: hidden; }
+        #log { flex: 1; overflow-y: auto; color: var(--neon); font-size: 13px; line-height: 1.5; border: 1px solid #1a1a1a; padding: 8px; background: rgba(0,0,0,0.5); }
+        
+        .btn { background: var(--accent); color: white; border: none; padding: 12px; margin-top: 8px; border-radius: 4px; font-weight: bold; width: 100%; cursor: pointer; }
+        .btn:hover { opacity: 0.9; }
+        .entry { margin-bottom: 10px; border-bottom: 1px solid #111; padding-bottom: 6px; animation: scan 0.3s ease-out; }
+        @keyframes scan { from { opacity: 0; transform: translateX(-5px); } to { opacity: 1; transform: translateX(0); } }
+
+        /* 結局幕 */
+        #end-screen { display: none; position: absolute; inset: 0; background: #000; color: #fff; z-index: 1000; flex-direction: column; justify-content: center; align-items: center; padding: 30px; text-align: center; }
+        .end-text { max-width: 600px; line-height: 1.8; margin-bottom: 25px; color: #eee; }
+    </style>
+</head>
+<body>
+
+<div id="game-view" style="display: flex; flex-direction: column; height: 100%;">
+    <div class="header">
+        <span style="color:var(--accent); font-weight: bold;">FORTUNE MONITOR V1.0</span>
+        <span id="stat">探索進度: 0%</span>
+    </div>
+
+    <div id="building-area">
+        <div id="building"></div>
+    </div>
+
+    <div id="console">
+        <div id="log">[系統就緒] 點擊大廈視窗以攔截私密訊號...</div>
+        <button class="btn" onclick="resetSim()">重新啟動監控</button>
+    </div>
+</div>
+
+<div id="end-screen">
+    <h2 style="color:var(--accent); letter-spacing: 4px;">監測任務終止</h2>
+    <div class="end-text" id="final-desc"></div>
+    <div class="end-text" style="font-size: 0.9em; border-top: 1px solid #333; pt: 15px;">
+        「這是一個開放性的參觀活動... 如果你不願意目睹悲慘，可以看向大廈北側。那裡有陽光、林蔭與公園，是這城市最美好的一面。」
+    </div>
+    <button class="btn" style="max-width: 200px;" onclick="closeEnd()">返回南側出口</button>
+</div>
+
+<script>
+    const data = {
+        "1A": "關佑開：『進電梯要叫人啊...嘿嘿，這群住戶現在全走在我的尿裡。他們以為這地毯是乾淨的？』",
+        "3C": "賴進財：『積德啊...這獎券是仙佛給的回報。五萬塊一件陰功，我算得準準的！』",
+        "4B": "梁隆潤：『入你娘！現在的年輕人道德淪喪。他媽的，連路都不會走，只會吐痰。』",
+        "6A": "蘇珊：『這些老頭簡直是垃圾。I hate them! 他們身上有股發霉的味道。』",
+        "7A": "魏丹誠：『你為什麼讓小孩叫管理員伯伯？他跟你什麼關係！』(傳來劇烈的家具倒塌與花瓶碎裂聲)",
+        "8B": "易婉君：『(水聲) 總覺得這公寓有個色狼...住樓上的，但我從沒正眼瞧過他。』",
+        "10C": "張德充：『舊金山、西雅圖...誰會選擇我？這隻死狗壓碎了就算了，反正我要走了。』",
+        "11D": "林秉宏：『累得像狗卻睡不著...我焦慮嗎？這世界上每個人都比我焦慮。』",
+        "12B": "齊老太太：『兒啊...這門後是誰...茶几倒了...這紅豔豔的是血還是茶？我分不清...好冷...』",
+        "12D": "管滌凡：『太美了！這張畫一定拿獎...這臭味肯定是老農夫的汗味，充滿靈魂。』",
+        "12A": "范揚帆：『Fortune Building 唸起來多大氣，林南施懂什麼英文？居然想叫 Fully。』"
+    };
+
+    let seen = new Set();
+
+    function init() {
+        const b = document.getElementById('building');
+        b.innerHTML = '';
+        for (let f = 1; f <= 12; f++) {
+            const div = document.createElement('div');
+            div.className = 'floor';
+            div.innerHTML = `<div class="label">${f}F</div>`;
+            ['A', 'B', 'C', 'D'].forEach(r => {
+                const id = f + r;
+                const room = document.createElement('div');
+                room.className = 'room';
+                if (id === "12B") room.innerHTML = '<div class="scent"></div>';
+                room.onclick = () => {
+                    const log = document.getElementById('log');
+                    const msg = data[id] || `[房間 ${id}] 無異常，僅錄得微弱電器運轉聲。`;
+                    log.innerHTML = `<div class="entry"><span style="color:#555">[${id}]</span> ${msg}</div>` + log.innerHTML;
+                    room.classList.add('seen');
+                    if (data[id]) { seen.add(id); update(); }
+                    // 結局條件：看過 12B 且 總量達標
+                    if (seen.size >= 11 && id === "12B") trigger();
+                };
+                div.appendChild(room);
+            });
+            b.appendChild(div);
+        }
+    }
+
+    function update() {
+        document.getElementById('stat').innerText = `探索進度: ${Math.round((seen.size/11)*100)}%`;
+    }
+
+    function resetSim() {
+        seen.clear();
+        update();
+        document.getElementById('log').innerHTML = '[記憶區塊清除] 監控系統重新初始化中...';
+        init();
+    }
+
+    function trigger() {
+        setTimeout(() => {
+            const finalDesc = "雙胞胎兄弟在盲人遊戲中衝向頂樓，被一股巨大、膨脹且腐敗的臭氣推撞。他們「看見」了地磚上的茶漬、血跡、倒下的沙發，以及齊老太太猝死多日、縮如雞爪的屍體。這棟公寓的冷漠，最終在12樓化作實體的腐臭。";
+            document.getElementById('final-desc').innerText = finalDesc;
+            document.getElementById('end-screen').style.display = 'flex';
+        }, 800);
+    }
+
+    function closeEnd() {
+        document.getElementById('end-screen').style.display = 'none';
+        resetSim(); // 返回時自動重置，避免當掉
+    }
+
+    init();
+</script>
+</body>
+</html>
+
